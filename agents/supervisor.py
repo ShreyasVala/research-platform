@@ -16,6 +16,10 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from config import get_settings
 from agents.memory import MemoryManager, ResearchState
 from agents.worker import WorkerAgent
+import logging
+
+# Set up logging for this module
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 memory = MemoryManager()
@@ -82,31 +86,36 @@ Be specific. Cite sources inline. Use professional language."""
         return job_id
 
     async def _pipeline(self, job_id: str, query: str, document_name: str | None):
-        """The full research pipeline, running in the background."""
         try:
-            # ── Phase 1: Plan ────────────────────────────────────────
-            await memory.update_status(job_id, "planning")
-            plan = await self._plan(query, document_name)
+            logger.info(f"Job {job_id} started — query: {query[:50]}")
+            except Exception as e:
+            logger.error(f"Error occurred while starting job {job_id}: {e}")
+            raise
 
-            # Save plan to disk immediately — critical memory pattern
+            await memory.update_status(job_id, "planning")
+
+            logger.info(f"Job {job_id} — creating research plan")
+            plan = await self._plan(query, document_name)
+            logger.info(f"Job {job_id} — plan created with {len(plan['tasks'])} tasks")
+
             state = await memory.load(job_id)
             state.plan = plan["tasks"]
             state.status = "running"
             await memory.save(state)
 
-            # ── Phase 2: Run workers in parallel ─────────────────────
             await self._execute_workers(job_id, plan["tasks"])
+            logger.info(f"Job {job_id} — all workers complete")
 
-            # ── Phase 3: Synthesize all findings ─────────────────────
             await memory.update_status(job_id, "synthesizing")
+            logger.info(f"Job {job_id} — synthesizing report")
             state = await memory.load(job_id)
             report = await self._synthesize(query, state.worker_results)
 
-            # ── Phase 4: Done ─────────────────────────────────────────
             await memory.update_status(job_id, "done", final_report=report)
+            logger.info(f"Job {job_id} — done")
 
         except Exception as e:
-            # Save the error so the user can see what went wrong
+            logger.error(f"Job {job_id} — failed: {e}")
             await memory.update_status(job_id, "failed", error=str(e))
             raise
 
