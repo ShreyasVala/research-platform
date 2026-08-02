@@ -1,12 +1,10 @@
 # tools/document_tool.py
-# Reads files from the uploads/ folder and returns their text.
+# Reads files from local or S3 upload storage and returns their text.
 # Supports PDF, TXT, MD, CSV.
-# All processing is local — zero cost, no API needed.
 
+import asyncio
 from pathlib import Path
-from config import get_settings
-
-settings = get_settings()
+from tools.storage import read_upload_bytes, safe_filename
 
 
 async def read_document(filename: str, max_chars: int = 8000) -> dict:
@@ -14,34 +12,37 @@ async def read_document(filename: str, max_chars: int = 8000) -> dict:
     Reads a file and returns its text content.
     max_chars prevents sending huge files that overflow the LLM context window.
     """
-    path = Path(settings.uploads_dir) / filename
+    name = safe_filename(filename)
+    if name is None:
+        return {"error": f"Invalid filename: {filename}"}
 
-    if not path.exists():
-        return {"error": f"File not found: {filename}"}
+    content, error = await asyncio.to_thread(read_upload_bytes, name)
+    if error:
+        return {"error": error}
 
     try:
-        suffix = path.suffix.lower()
+        suffix = Path(name).suffix.lower()
         if suffix == ".pdf":
-            text = _read_pdf(path)
+            text = _read_pdf_bytes(content)
         else:
             # Plain text for .txt, .md, .csv
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = content.decode("utf-8", errors="replace")
     except Exception as e:
         return {"error": f"Could not read file: {e}"}
 
     truncated = len(text) > max_chars
     return {
-        "filename": filename,
+        "filename": name,
         "content": text[:max_chars],
         "truncated": truncated,      # tells the agent if content was cut
         "char_count": min(len(text), max_chars),
     }
 
 
-def _read_pdf(path: Path) -> str:
-    """Extracts all text from a PDF using PyMuPDF (installed as 'fitz')."""
+def _read_pdf_bytes(content: bytes) -> str:
+    """Extracts text from PDF bytes stored locally or in S3."""
     import fitz  # PyMuPDF
-    doc = fitz.open(str(path))
+    doc = fitz.open(stream=content, filetype="pdf")
     pages = [page.get_text() for page in doc]
     doc.close()
     return "\n\n".join(pages)

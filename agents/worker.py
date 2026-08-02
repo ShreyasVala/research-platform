@@ -28,8 +28,7 @@ If the tool results are mock/fake data, say so clearly."""
     def __init__(self, worker_id: str, job_id: str):
         self.worker_id = worker_id    # e.g. "a3f9-w0", "a3f9-w1"
         self.job_id = job_id
-        # This returns an AsyncOpenAI client pointed at Ollama or OpenAI
-        # depending on what LLM_PROVIDER is set to in .env
+        # This returns the shared asynchronous LLM API client.
         self.client = settings.make_llm_client()
         self.model = settings.worker_model
 
@@ -85,7 +84,7 @@ If the tool results are mock/fake data, say so clearly."""
 
     # @retry decorator: if this function raises an exception, automatically
     # try again up to 3 times. Wait 1s before retry 2, 2s before retry 3.
-    # This handles temporary Ollama timeouts or network hiccups gracefully.
+    # This handles temporary API timeouts or network hiccups gracefully.
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     async def _summarize(self, task_description: str, tool_results: list) -> str:
         """Sends tool results to the LLM and gets a written summary back."""
@@ -109,7 +108,7 @@ If the tool results are mock/fake data, say so clearly."""
             },
         ]
 
-        # This is the actual call to the LLM (Ollama or OpenAI)
+        # This is the actual call to the LLM API.
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=messages,

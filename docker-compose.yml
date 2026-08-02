@@ -1,28 +1,10 @@
-
-
 services:
-  # Your FastAPI research platform
   app:
     build: .
     ports:
-      - "8000:8000"      # maps container port 8000 to your machine's port 8000
+      - "8000:8000"
     env_file: .env
-    environment:
-      OLLAMA_BASE_URL: http://ollama:11434/v1   # points to the ollama service below
     volumes:
-      - ./uploads:/app/uploads    # your uploads folder syncs with the container
+      - ./uploads:/app/uploads
       - ./reports:/app/reports
       - ./state:/app/state
-    depends_on:
-      - ollama
-
-  # Free local LLM — runs alongside your app
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama   # keeps downloaded models between restarts
-
-volumes:
-  ollama_data:

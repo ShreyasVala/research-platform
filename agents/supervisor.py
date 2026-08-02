@@ -16,6 +16,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from config import get_settings
 from agents.memory import MemoryManager, ResearchState
 from agents.worker import WorkerAgent
+from tools.storage import save_report_text
 import logging
 
 # Set up logging for this module
@@ -88,10 +89,6 @@ Be specific. Cite sources inline. Use professional language."""
     async def _pipeline(self, job_id: str, query: str, document_name: str | None):
         try:
             logger.info(f"Job {job_id} started — query: {query[:50]}")
-            except Exception as e:
-            logger.error(f"Error occurred while starting job {job_id}: {e}")
-            raise
-
             await memory.update_status(job_id, "planning")
 
             logger.info(f"Job {job_id} — creating research plan")
@@ -110,8 +107,19 @@ Be specific. Cite sources inline. Use professional language."""
             logger.info(f"Job {job_id} — synthesizing report")
             state = await memory.load(job_id)
             report = await self._synthesize(query, state.worker_results)
+            report_location = await asyncio.to_thread(
+                save_report_text,
+                job_id,
+                query,
+                report,
+            )
 
-            await memory.update_status(job_id, "done", final_report=report)
+            await memory.update_status(
+                job_id,
+                "done",
+                final_report=report,
+                report_location=report_location,
+            )
             logger.info(f"Job {job_id} — done")
 
         except Exception as e:
@@ -150,7 +158,12 @@ Be specific. Cite sources inline. Use professional language."""
                     raw = part
                     break
 
-        return json.loads(raw)
+        plan = json.loads(raw)
+        if document_name:
+            for task in plan.get("tasks", []):
+                if task.get("type") == "document":
+                    task["document_name"] = document_name
+        return plan
 
     async def _execute_workers(self, job_id: str, tasks: list):
         """Groups tasks by priority, runs each group in parallel."""
@@ -165,7 +178,7 @@ Be specific. Cite sources inline. Use professional language."""
             group = by_priority[priority]
 
             # Semaphore = "allow maximum N workers running at the same time"
-            # Prevents hammering Ollama with too many simultaneous requests
+            # Prevents sending too many simultaneous LLM API requests
             semaphore = asyncio.Semaphore(settings.max_concurrent_workers)
 
             async def run_one(task, idx):
@@ -181,10 +194,20 @@ Be specific. Cite sources inline. Use professional language."""
 
             # Start ALL workers in this priority group simultaneously
             # return_exceptions=True = if one worker fails, others keep running
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *[run_one(task, i) for i, task in enumerate(group)],
                 return_exceptions=True,
             )
+            for idx, (task, result) in enumerate(zip(group, results)):
+                if isinstance(result, Exception):
+                    await memory.append_worker_result(job_id, {
+                        "worker_id": f"{job_id}-w{idx}-failed",
+                        "task": task,
+                        "tool_results": [],
+                        "summary": "",
+                        "status": "failed",
+                        "error": str(result),
+                    })
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     async def _synthesize(self, query: str, worker_results: list) -> str:

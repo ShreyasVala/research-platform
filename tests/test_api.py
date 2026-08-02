@@ -1,7 +1,7 @@
 # tests/test_api.py
 # Tests every FastAPI endpoint.
 # Uses httpx to make real HTTP requests to the running app.
-# Mocks the LLM calls so tests run without Ollama.
+# Mocks LLM calls so tests run without using an API key.
 
 import pytest
 import asyncio
@@ -92,6 +92,16 @@ async def test_upload_unsupported_type(client):
     response = await client.post(
         "/upload",
         files={"file": ("test.exe", b"fake content", "application/octet-stream")}
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_upload_rejects_path_traversal(client):
+    """Uploaded filenames must stay inside the uploads folder."""
+    response = await client.post(
+        "/upload",
+        files={"file": ("../evil.txt", b"bad path", "text/plain")}
     )
     assert response.status_code == 400
 

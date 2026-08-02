@@ -10,7 +10,7 @@
 
 import json
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from config import get_settings
 
@@ -23,12 +23,13 @@ class ResearchState:
     def __init__(self, job_id: str, query: str):
         self.job_id = job_id          # short unique ID, e.g. "a3f9b2c1"
         self.query = query            # the original user question
-        self.created_at = datetime.utcnow().isoformat()
+        self.created_at = datetime.now(timezone.utc).isoformat()
         self.updated_at = self.created_at
         self.status = "planning"      # planning → running → synthesizing → done / failed
         self.plan = []                # list of sub-tasks the supervisor creates
         self.worker_results = []      # findings from each worker as they finish
         self.final_report = ""        # the finished report
+        self.report_location = ""      # local path or S3 URI for the report
         self.error = ""               # error message if something went wrong
 
     def to_dict(self) -> dict:
@@ -57,7 +58,7 @@ class MemoryManager:
         return self.state_dir / f"{job_id}.json"
 
     async def save(self, state: ResearchState) -> None:
-        state.updated_at = datetime.utcnow().isoformat()
+        state.updated_at = datetime.now(timezone.utc).isoformat()
         async with self._lock:
             self._path(state.job_id).write_text(
                 json.dumps(state.to_dict(), indent=2),

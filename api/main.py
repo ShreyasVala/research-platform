@@ -5,7 +5,7 @@
 # When running, visit http://localhost:8000/docs in your browser
 # for an interactive page to test every endpoint without any frontend.
 
-import shutil
+import asyncio
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from config import get_settings
 from agents.supervisor import SupervisorAgent
 from agents.memory import MemoryManager
+from tools.storage import save_upload_bytes, safe_filename
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -58,9 +59,10 @@ async def health():
     """Check the server is running. Shows current LLM config."""
     return {
         "status": "ok",
-        "llm_provider": settings.llm_provider,
+        "llm_provider": "openai",
         "supervisor_model": settings.supervisor_model,
         "worker_model": settings.worker_model,
+        "storage_backend": settings.storage_backend,
     }
 
 
@@ -117,6 +119,7 @@ async def get_report(job_id: str):
         "job_id": state.job_id,
         "query": state.query,
         "report": state.final_report,
+        "report_location": getattr(state, "report_location", "") or None,
         "worker_count": len(state.worker_results),
     }
 
@@ -131,22 +134,29 @@ async def list_jobs():
 async def upload_document(file: UploadFile = File(...)):
     """Upload a PDF or text file to include in a research job."""
     allowed = {".pdf", ".txt", ".md", ".csv"}
-    suffix = Path(file.filename).suffix.lower()
+    name = safe_filename(file.filename)
+    if name is None:
+        raise HTTPException(status_code=400, detail="Invalid filename.")
+
+    suffix = Path(name).suffix.lower()
     if suffix not in allowed:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file type '{suffix}'. Allowed: {allowed}",
         )
 
-    dest = Path(settings.uploads_dir) / file.filename
-    with dest.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+    content = await file.read()
+    try:
+        saved = await asyncio.to_thread(save_upload_bytes, name, content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     return {
-        "filename": file.filename,
-        "size_kb": round(dest.stat().st_size / 1024, 1),
+        "filename": saved["filename"],
+        "size_kb": saved["size_kb"],
+        "storage": saved["storage"],
         "message": (
             f"Uploaded successfully. "
-            f"Use document_name='{file.filename}' in your /research request."
+            f"Use document_name='{saved['filename']}' in your /research request."
         ),
     }
